@@ -25,7 +25,7 @@ jobs:
       - name: Update Discord Message
         run: |
           # Sends a PATCH request to Discord to overwrite the existing message
-          curl -X PATCH \
+          curl -i -X PATCH \
             -H "Content-Type: application/json" \
             -d '{"content": '"$(echo "${{ steps.read_file.outputs.content }}" | jq -R -s '.')"'}' \
             "${{ secrets.DISCORD_WEBHOOK_URL }}/messages/1535219126304251945"
