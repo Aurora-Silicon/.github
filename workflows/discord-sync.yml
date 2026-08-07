@@ -1,0 +1,31 @@
+name: Sync Features to Discord
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'features.md'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Read File Content
+        id: read_file
+        run: |
+          # Read file and format it safely for the JSON payload
+          CONTENT=$(cat features.md)
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          echo "$CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Update Discord Message
+        run: |
+          # Sends a PATCH request to Discord to overwrite the existing message
+          curl -X PATCH \
+            -H "Content-Type: application/json" \
+            -d '{"content": '"$(echo "${{ steps.read_file.outputs.content }}" | jq -R -s '.')"'}' \
+            "${{ secrets.DISCORD_WEBHOOK_URL }}/messages/1535219126304251945"
