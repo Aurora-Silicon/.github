@@ -13,9 +13,19 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Send Document Update to Discord
-        uses: Ilshidur/action-discord@master
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      - name: Read Features File
+        id: read_md
+        run: |
+          # Read file content and cleanly format it for GitHub Actions variables
+          EOF=$(dd if=/dev/urandom bs=15 count=1 2>/dev/null | base64)
+          echo "FILE_DATA<<$EOF" >> $GITHUB_ENV
+          cat features.md >> $GITHUB_ENV
+          echo "$EOF" >> $GITHUB_ENV
+
+      - name: Post Content to Discord
+        uses: sinscary/discord-webhook-action@v1.0.0
         with:
-          args: '📢 **The Features Document has been updated!** \n\n ${{ github.event.head_commit.message }}'
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          description: ${{ env.FILE_DATA }}
+          username: "Features Monitor Bot"
+          avatar-url: "https://githubassets.com"
