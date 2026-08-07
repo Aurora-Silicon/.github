@@ -23,12 +23,8 @@ jobs:
 
       - name: Update Discord Message
         run: |
-          # The slack layer tracks "message_id" dynamically. 
-          # First run creates it. Future runs edit it.
-          curl -i -X POST \
+          # Natively patch the webhook-owned message to overwrite it
+          curl -i -X PATCH \
             -H "Content-Type: application/json" \
-            -d '{
-              "text": '"$(echo "${{ steps.read_file.outputs.content }}" | jq -R -s '.')"',
-              "message_id": "features_update_msg"
-            }' \
-            "${{ secrets.DISCORD_WEBHOOK_URL }}"
+            -d '{"content": '"$(echo "${{ steps.read_file.outputs.content }}" | jq -R -s '.')"'}' \
+            "${{ secrets.DISCORD_WEBHOOK_URL }}/messages/1535224455218077707"
