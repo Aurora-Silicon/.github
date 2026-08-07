@@ -13,19 +13,16 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Load Features Content
-        id: read_file
+      - name: Build and Send Payload
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # Safely read the multiline markdown file into a workflow environment variable
-          {
-            echo "FEATURES_TEXT<<EOF"
-            cat features.md
-            echo "EOF"
-          } >> $GITHUB_ENV
+          # 1. Read the raw features.md file and convert it safely into a strict JSON object structure
+          # Using jq directly on the file maps headers, linebreaks, and spaces perfectly.
+          jq -Rs '{"content": .}' features.md > discord_payload.json
 
-      - name: Update Discord Live Message
-        uses: JayRizzo/Discord-Webhook-Action@v1.2.2
-        with:
-          client-id: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          message-id: "1535224455218077707"
-          content: ${{ env.FEATURES_TEXT }}
+          # 2. Fire the native PATCH request using the stable JSON file structure
+          curl -i -X PATCH \
+            -H "Content-Type: application/json" \
+            -d @discord_payload.json \
+            "$WEBHOOK_URL/messages/1535224455218077707"
