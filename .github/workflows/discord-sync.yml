@@ -21,10 +21,56 @@ jobs:
           echo "$CONTENT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Update Discord Message
+      - name: Create or Update Discord Message
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # Natively patch the webhook-owned message to overwrite it
-          curl -i -X PATCH \
+          # 1. Safely format markdown content for JSON
+          JSON_CONTENT=$(echo "${{ steps.read_file.outputs.content }}" | jq -R -s '.')
+          
+          # 2. Check if we have a previously saved Message ID file
+          ID_FILE=".github/discord_msg_id.txt"
+          
+          if [ -f "$ID_FILE" ]; then
+            MSG_ID=$(cat "$ID_FILE")
+            echo "Found existing message ID: $MSG_ID. Attempting update..."
+            
+            # 3. Try to PATCH the existing message
+            RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
+              -H "Content-Type: application/json" \
+              -d "{\"content\": $JSON_CONTENT}" \
+              "$WEBHOOK_URL/messages/$MSG_ID")
+              
+            if [ "$RESPONSE" = "200" ]; then
+              echo "Successfully updated Discord message."
+              exit 0
+            fi
+            echo "PATCH failed with status $RESPONSE. Falling back to creating a new message..."
+          fi
+
+          # 4. Create a new message if no ID exists or if PATCH failed (404)
+          echo "Sending a fresh message to Discord..."
+          NEW_MSG=$(curl -s -X POST \
             -H "Content-Type: application/json" \
-            -d '{"content": '"$(echo "${{ steps.read_file.outputs.content }}" | jq -R -s '.')"'}' \
-            "${{ secrets.DISCORD_WEBHOOK_URL }}/messages/1535224455218077707"
+            -d "{\"content\": $JSON_CONTENT}" \
+            "$WEBHOOK_URL?wait=true")
+          
+          # 5. Extract the true Message ID assigned by Discord
+          NEW_ID=$(echo "$NEW_MSG" | jq -r '.id')
+          
+          if [ "$NEW_ID" != "null" ] && [ -n "$NEW_ID" ]; then
+            echo "New Message ID created by Discord: $NEW_ID"
+            mkdir -p .github
+            echo "$NEW_ID" > "$ID_FILE"
+            
+            # 6. Push the saved ID file back to the repository automatically
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@://github.com"
+            git add "$ID_FILE"
+            git commit -m "chore: save live discord message tracking id [skip ci]"
+            git push
+          else
+            echo "Failed to capture a valid Message ID from Discord."
+            echo "Discord Response: $NEW_MSG"
+            exit 1
+          fi
