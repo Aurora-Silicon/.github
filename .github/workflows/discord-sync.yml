@@ -13,16 +13,9 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Build and Send Payload
+      - name: Send Document Update to Discord
+        uses: Ilshidur/action-discord@master
         env:
-          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: |
-          # 1. Read the raw features.md file and convert it safely into a strict JSON object structure
-          # Using jq directly on the file maps headers, linebreaks, and spaces perfectly.
-          jq -Rs '{"content": .}' features.md > discord_payload.json
-
-          # 2. Fire the native PATCH request using the stable JSON file structure
-          curl -i -X PATCH \
-            -H "Content-Type: application/json" \
-            -d @discord_payload.json \
-            "$WEBHOOK_URL/messages/1535224455218077707"
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        with:
+          args: '📢 **The Features Document has been updated!** \n\n ${{ github.event.head_commit.message }}'
