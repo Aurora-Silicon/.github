@@ -1,31 +1,90 @@
-name: Sync Features to Discord
+name: Sync features.md to Discord
+
 on:
   push:
-    branches:
-      - main
-    paths:
-      - 'features.md'
+    branches: [main]
+    paths: ['features.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: discord-sync
+  cancel-in-progress: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Read Features File
-        id: read_md
+      - name: Build JSON payload
         run: |
-          # Read file content and cleanly format it for GitHub Actions variables
-          EOF=$(dd if=/dev/urandom bs=15 count=1 2>/dev/null | base64)
-          echo "FILE_DATA<<$EOF" >> $GITHUB_ENV
-          cat features.md >> $GITHUB_ENV
-          echo "$EOF" >> $GITHUB_ENV
+          set -euo pipefail
+          if [ ! -s features.md ]; then
+            echo "::error::features.md is missing or empty at the repo root"
+            exit 1
+          fi
+          jq -Rs '{ content: ., allowed_mentions: { parse: [] } }' \
+            features.md > payload.json
+          echo "payload bytes: $(wc -c < payload.json)"
 
-      - name: Post Content to Discord
-        uses: sinscary/discord-webhook-action@v1.0.0
-        with:
-          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          description: ${{ env.FILE_DATA }}
-          username: "Features Monitor Bot"
-          avatar-url: "https://githubassets.com"
+      - name: Send or update Discord message
+        id: discord
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+
+          # Normalise the secret: strip any query string and trailing slash.
+          BASE="${WEBHOOK%%\?*}"
+          BASE="${BASE%/}"
+          echo "::add-mask::$BASE"
+
+          STATE=".github/discord-message-id"
+          MSG_ID=""
+          if [ -f "$STATE" ]; then
+            MSG_ID="$(tr -d '[:space:]' < "$STATE")"
+          fi
+
+          post_new () {
+            code=$(curl -sS -o resp.json -w '%{http_code}' -X POST \
+              -H 'Content-Type: application/json' \
+              --data-binary @payload.json \
+              "$BASE?wait=true")
+            if [ "$code" -ge 300 ]; then
+              echo "::error::POST failed ($code): $(cat resp.json)"
+              exit 1
+            fi
+            NEW_ID="$(jq -r '.id' resp.json)"
+            printf '%s\n' "$NEW_ID" > "$STATE"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Created message $NEW_ID"
+          }
+
+          if [ -n "$MSG_ID" ]; then
+            code=$(curl -sS -o resp.json -w '%{http_code}' -X PATCH \
+              -H 'Content-Type: application/json' \
+              --data-binary @payload.json \
+              "$BASE/messages/$MSG_ID")
+            case "$code" in
+              200) echo "Updated message $MSG_ID" ;;
+              404) echo "::warning::Message $MSG_ID is gone - posting a new one"
+                   post_new ;;
+              *)   echo "::error::PATCH failed ($code): $(cat resp.json)"
+                   exit 1 ;;
+            esac
+          else
+            post_new
+          fi
+
+      - name: Persist message id
+        if: steps.discord.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/discord-message-id
+          git commit -m "chore: track discord message id"
+          git push
