@@ -17,18 +17,29 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Build JSON payload
+      - name: Build and verify JSON payload
         run: |
           set -euo pipefail
-          if [ ! -s features.md ]; then
-            echo "::error::features.md is missing or empty at the repo root"
-            exit 1
-          fi
+          ls -l features.md
+          echo "--- features.md with control characters visible ---"
+          head -c 400 features.md | cat -A
+          echo
+
           jq -Rs '{ content: ., allowed_mentions: { parse: [] } }' \
             features.md > payload.json
+
+          if ! jq -e '(.content | gsub("\\s"; "") | length) > 0' payload.json > /dev/null; then
+            echo "::error::features.md is blank or whitespace-only - this is what Discord reports as 50006"
+            exit 1
+          fi
+
           echo "payload bytes: $(wc -c < payload.json)"
+          echo "content chars: $(jq -r '.content | length' payload.json)"
+          echo "--- first 300 bytes of payload.json ---"
+          head -c 300 payload.json
+          echo
 
       - name: Send or update Discord message
         id: discord
@@ -37,24 +48,35 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Normalise the secret: strip any query string and trailing slash.
-          BASE="${WEBHOOK%%\?*}"
+          # Strip any whitespace/newline that rode along when the secret was pasted.
+          CLEAN="$(printf '%s' "$WEBHOOK" | tr -d '[:space:]')"
+          BASE="${CLEAN%%\?*}"
           BASE="${BASE%/}"
           echo "::add-mask::$BASE"
 
-          STATE=".github/discord-message-id"
-          MSG_ID=""
-          if [ -f "$STATE" ]; then
-            MSG_ID="$(tr -d '[:space:]' < "$STATE")"
-          fi
+          case "$BASE" in
+            https://discord.com/api/webhooks/*|https://discordapp.com/api/webhooks/*) ;;
+            *) echo "::error::DISCORD_WEBHOOK_URL is not a webhook URL"; exit 1 ;;
+          esac
 
-          post_new () {
-            code=$(curl -sS -o resp.json -w '%{http_code}' -X POST \
+          send () {  # $1 = method, $2 = url
+            read -r HTTP_CODE UPLOADED <<< "$(curl -sS -o resp.json \
+              -w '%{http_code} %{size_upload}' \
+              -X "$1" \
               -H 'Content-Type: application/json' \
               --data-binary @payload.json \
-              "$BASE?wait=true")
-            if [ "$code" -ge 300 ]; then
-              echo "::error::POST failed ($code): $(cat resp.json)"
+              "$2")"
+            echo "$1 -> HTTP $HTTP_CODE (uploaded $UPLOADED bytes)"
+          }
+
+          STATE=".github/discord-message-id"
+          MSG_ID=""
+          if [ -f "$STATE" ]; then MSG_ID="$(tr -d '[:space:]' < "$STATE")"; fi
+
+          post_new () {
+            send POST "$BASE?wait=true"
+            if [ "$HTTP_CODE" -ge 300 ]; then
+              echo "::error::POST failed ($HTTP_CODE): $(cat resp.json)"
               exit 1
             fi
             NEW_ID="$(jq -r '.id' resp.json)"
@@ -64,15 +86,12 @@ jobs:
           }
 
           if [ -n "$MSG_ID" ]; then
-            code=$(curl -sS -o resp.json -w '%{http_code}' -X PATCH \
-              -H 'Content-Type: application/json' \
-              --data-binary @payload.json \
-              "$BASE/messages/$MSG_ID")
-            case "$code" in
+            send PATCH "$BASE/messages/$MSG_ID"
+            case "$HTTP_CODE" in
               200) echo "Updated message $MSG_ID" ;;
               404) echo "::warning::Message $MSG_ID is gone - posting a new one"
                    post_new ;;
-              *)   echo "::error::PATCH failed ($code): $(cat resp.json)"
+              *)   echo "::error::PATCH failed ($HTTP_CODE): $(cat resp.json)"
                    exit 1 ;;
             esac
           else
