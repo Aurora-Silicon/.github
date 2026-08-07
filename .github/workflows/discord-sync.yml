@@ -16,7 +16,6 @@ jobs:
       - name: Read File Content
         id: read_file
         run: |
-          # Read file and format it safely for the JSON payload
           CONTENT=$(cat features.md)
           echo "content<<EOF" >> $GITHUB_OUTPUT
           echo "$CONTENT" >> $GITHUB_OUTPUT
@@ -24,8 +23,12 @@ jobs:
 
       - name: Update Discord Message
         run: |
-          # Sends a PATCH request to Discord to overwrite the existing message
-          curl -i -X PATCH \
+          # The slack layer tracks "message_id" dynamically. 
+          # First run creates it. Future runs edit it.
+          curl -i -X POST \
             -H "Content-Type: application/json" \
-            -d '{"content": '"$(echo "${{ steps.read_file.outputs.content }}" | jq -R -s '.')"'}' \
-            "${{ secrets.DISCORD_WEBHOOK_URL }}/messages/1535219126304251945"
+            -d '{
+              "text": '"$(echo "${{ steps.read_file.outputs.content }}" | jq -R -s '.')"',
+              "message_id": "features_update_msg"
+            }' \
+            "${{ secrets.DISCORD_WEBHOOK_URL }}"
